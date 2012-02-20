@@ -7,6 +7,8 @@ import com.twitter.conversions.time._
 import com.twitter.conversions.storage._
 import com.twitter.flockdb.shards.QueryClass
 import com.twitter.flockdb.Priority
+import com.twitter.flockdb.queries.Query
+import com.twitter.flockdb.queries
 
 trait Credentials extends Connection {
   val env = System.getenv().toMap
@@ -24,14 +26,14 @@ class ProductionQueryEvaluator extends QueryEvaluator {
   database.pool = new ApachePoolingDatabase {
     sizeMin = 40
     sizeMax = 40
-    maxWait = 100.millis
+    maxWait = 3000.millis
     minEvictableIdle = 60.seconds
     testIdle = 1.second
     testOnBorrow = false
   }
 
   database.timeout = new TimingOutDatabase {
-    open = 50.millis
+    open = 3.seconds
     poolSize = 10
     queueSize = 10000
   }
@@ -55,11 +57,11 @@ class ProductionNameServerReplica(host: String) extends Mysql {
     database.pool.foreach { p =>
       p.sizeMin = 1
       p.sizeMax = 1
-      p.maxWait = 1.second
+      p.maxWait = 3.seconds
     }
 
     database.timeout.foreach { t =>
-      t.open = 1.second
+      t.open = 3.seconds
     }
   }
 }
@@ -68,11 +70,35 @@ new FlockDB {
   aggregateJobsPageSize = 500
 
   val server = new FlockDBServer with TSelectorServer {
-    timeout = 100.millis
-    idleTimeout = 60.seconds
+    timeout = 3000.millis
+    idleTimeout = 3.minutes
     threadPool.minThreads = 250
     threadPool.maxThreads = 250
   }
+
+  // Added to solve the intersection query problem
+
+  intersectionQuery = new IntersectionQuery {
+    intersectionTimeout = 5000.millis
+    averageIntersectionProportion = 0.1
+    intersectionPageSizeMax = 4000
+    
+    override def intersect(query1: queries.Query, query2: queries.Query) = new queries.IntersectionQuery(
+      query1,
+      query2,
+      averageIntersectionProportion,
+      intersectionPageSizeMax,
+      intersectionTimeout
+    )
+
+    override def difference(query1: queries.Query, query2: queries.Query) = new queries.DifferenceQuery(
+      query1,
+      query2,
+      averageIntersectionProportion,
+      intersectionPageSizeMax,
+      intersectionTimeout
+    )
+  }   
 
   val nameServer = new com.twitter.gizzard.config.NameServer {
     mappingFunction = ByteSwapper
@@ -83,7 +109,7 @@ new FlockDB {
     )
   }
 
-  jobInjector.timeout = 100.millis
+  jobInjector.timeout = 3000.millis
   jobInjector.idleTimeout = 60.seconds
   jobInjector.threadPool.minThreads = 30
 
@@ -124,7 +150,7 @@ new FlockDB {
     }
 
     errorLimit = 100
-    errorRetryDelay = 15.minutes
+    errorRetryDelay = 1.minute
     errorStrobeInterval = 1.second
     perFlushItemLimit = 100
     jitterRate = 0
